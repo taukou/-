@@ -5,8 +5,7 @@
 ## 1. 關於專案
 
 本專案為一台**自動接垃圾垃圾桶**，透過樹莓派與攝影機進行影像辨識，當系統偵測到使用者手中持有垃圾時，垃圾桶會自動移動到使用者附近，讓使用者可以更方便地丟垃圾。  
->本專案以乒乓球代替垃圾做模擬
----
+>#### 本專案以乒乓球代替垃圾做模擬
 
 ## 2. 專案緣由
 
@@ -111,8 +110,12 @@ pip3 install numpy
 ### 程式設計：
 
 #### 1.在開始之前
->本專案判定垃圾的方式是以色彩蒙版辨識，如要使用AI模型判定可忽略1.2部分
-#### HSV 色彩蒙版說明
+>### 本專案判定垃圾的方式是以色彩蒙版辨識，如要使用AI模型判定可忽略1.2.3部分
+>### 建議依照步驟單元測試後再執行主程式
+
+---
+
+#### 2.HSV 色彩蒙版說明
 
 在垃圾桶追蹤專案中，我們使用 HSV 色彩蒙版來辨識手上垃圾的顏色，以下說明其原理與用途。
 
@@ -178,7 +181,7 @@ mask = cv2.inRange(hsv, LOWER_COLOR, UPPER_COLOR)
 
 ---
 
-#### 2.目標物顏色測試
+#### 3.目標物顏色測試hsv_color_test.py/hsv_color_test2.py
 #### HSV 顏色範圍測試程式說明
 
 #### (1) 功能
@@ -222,107 +225,312 @@ python3 hsv_color_test.py
 
 - 按下 `q` 鍵或使用 Ctrl+C 結束程式。
 - 程式會自動釋放攝影機與關閉視窗。
-#### hsv_color_test程式碼內容
+
+>#### 確定數值後可在hsv_color_test2中測試數值正確性
+
+---
+#### 4.馬達測試 motor_test.py
+
+本程式為 **單顆直流馬達 PWM 控制測試程式**，  
+使用 Raspberry Pi GPIO 搭配 PWM 訊號，測試馬達的：
+
+- 正轉（Forward）
+- 反轉（Backward）
+- 停止（Stop）
+- 不同轉速（Duty Cycle）
+#### PWM腳位定義
+```python
+RPWM = 13  # 正轉 PWM
+LPWM = 19  # 反轉 PWM
+```
+#### 馬達控制函式
+#### (1)停止馬達（Stop）
+```python
+def stop():
+    pwmR.ChangeDutyCycle(0)
+    pwmL.ChangeDutyCycle(0)
+    print("STOP")
+
+```
+#### (2)正轉（Forward）
+```python
+def forward(speed):
+    pwmR.ChangeDutyCycle(speed)
+    pwmL.ChangeDutyCycle(0)
+
+```
+#### (3)反轉（Backward）
+```python
+def backward(speed):
+    pwmR.ChangeDutyCycle(0)
+    pwmL.ChangeDutyCycle(speed)
+
+```
+
+---
+#### 5.左右輪誤差測試 motor_test2.py
+#### PWM腳位定義
+```python
+# 左輪馬達
+L_RPWM_PIN = 18 
+L_LPWM_PIN = 12  
+
+# 右輪馬達
+R_RPWM_PIN = 13  
+R_LPWM_PIN = 19  
+```
+####右輪校正因子 (初始值 1.0)
+```python
+# 若車子往右偏，代表左輪太快，應調降左輪或提高右輪。
+# 這裡我們將以左輪 (1.0) 為基準，調整右輪的速度。
+CALIBRATION_FACTOR_R = 0.6 
+```
+####主要校正函式
+```python
+def move_forward_straight(base_speed, factor_R):
+    """
+    自走車前進，應用右輪校正因子。
+    左輪速度 = base_speed
+    右輪速度 = base_speed * factor_R
+    """
+    speed_L = base_speed
+    speed_R = int(base_speed * factor_R)
+    
+    # 確保速度在 0-100 範圍
+    speed_L = max(0, min(100, speed_L))
+    speed_R = max(0, min(100, speed_R))
+
+    # 左輪前進 (RPWM)
+    pwm_L_L.ChangeDutyCycle(0)
+    pwm_L_R.ChangeDutyCycle(speed_L)
+    
+    # 右輪前進 (RPWM)
+    pwm_R_L.ChangeDutyCycle(0)
+    pwm_R_R.ChangeDutyCycle(speed_R)
+    
+    print(f"L_Speed: {speed_L}% | R_Speed: {speed_R}%")
+```
+
+
+#### 6.主程式 app.py
+環境設置
 ```python
 import cv2
 import numpy as np
 import time
+import sys
+import RPi.GPIO as GPIO
 from picamera2 import Picamera2
+from libcamera import controls 
+```
+GPIO PIN 定義與設定
+```python
+L_FWD_PIN = 18
+L_BWD_PIN = 12
+R_FWD_PIN = 13
+R_BWD_PIN = 19
 
-# =========================================================
-# 視窗與滑條回呼函式
-# =========================================================
-def nothing(x):
-    pass
+PWM_FREQUENCY = 1000
+MAX_SPEED_DUTY = 100
 
-# =========================================================
-# 初始化 Picamera2
-# =========================================================
+pwm_L_fwd, pwm_L_bwd, pwm_R_fwd, pwm_R_bwd = None, None, None, None
+```
+校準與追蹤參數
+```python
+#影像大小
 FRAME_WIDTH = 640
 FRAME_HEIGHT = 480
 
-picam2 = Picamera2()
-config = picam2.create_preview_configuration(
-    main={"size": (FRAME_WIDTH, FRAME_HEIGHT), "format": "BGR888"}
-)
-picam2.configure(config)
-picam2.set_controls({
-    'AwbEnable': False,       # 關閉自動白平衡
-    'AnalogueGain': 1.0,
-    'ColourGains': (1.5, 1.5)
-})
-picam2.start()
-time.sleep(0.5)  # 等待自動曝光穩定
+# 已確認HSV
+H_MIN = 100; H_MAX = 130; S_MIN = 140; S_MAX = 255; V_MIN = 125; V_MAX = 255
+LOWER_COLOR = np.array([H_MIN, S_MIN, V_MIN])
+UPPER_COLOR = np.array([H_MAX, S_MAX, V_MAX])
+
+FLIP_CODE = 0 # 影像翻轉修正
+
+# P-Control 參數
+CENTER_X = FRAME_WIDTH // 2
+CENTER_Y = FRAME_HEIGHT // 2 # Y 軸目標: 鎖定在畫面正中心 240 像素處
+
+X_TOLERANCE = 60         # 增加 X 軸容許範圍，減少左右擺頭
+Y_TOLERANCE = 0         # Y 軸容許範圍 (停止的門檻)
+MAX_SPEED = 80           
+MIN_SPEED = 15           # 🎯 關鍵: 固定移動/轉向速度
+
+CALIBRATION_FACTOR_R = 0.5 #左右輪誤差調整
 
 # =========================================================
-# 建立控制滑條視窗
+# III. 馬達控制函式 (分階段控制)
 # =========================================================
-cv2.namedWindow("Mask")
-cv2.createTrackbar("H_MIN", "Mask", 0, 179, nothing)
-cv2.createTrackbar("H_MAX", "Mask", 179, 179, nothing)
-cv2.createTrackbar("S_MIN", "Mask", 0, 255, nothing)
-cv2.createTrackbar("S_MAX", "Mask", 255, 255, nothing)
-cv2.createTrackbar("V_MIN", "Mask", 0, 255, nothing)
-cv2.createTrackbar("V_MAX", "Mask", 255, 255, nothing)
+def init_motor_pins():
+    global pwm_L_fwd, pwm_L_bwd, pwm_R_fwd, pwm_R_bwd
+    try:
+        GPIO.setmode(GPIO.BCM); GPIO.setwarnings(False)
+        for pin in [L_FWD_PIN, L_BWD_PIN, R_FWD_PIN, R_BWD_PIN]:
+            GPIO.setup(pin, GPIO.OUT)
+        pwm_L_fwd = GPIO.PWM(L_FWD_PIN, PWM_FREQUENCY); pwm_L_fwd.start(0)
+        pwm_L_bwd = GPIO.PWM(L_BWD_PIN, PWM_FREQUENCY); pwm_L_bwd.start(0)
+        pwm_R_fwd = GPIO.PWM(R_FWD_PIN, PWM_FREQUENCY); pwm_R_fwd.start(0)
+        pwm_R_bwd = GPIO.PWM(R_BWD_PIN, PWM_FREQUENCY); pwm_R_bwd.start(0)
+        print("馬達控制腳位初始化完成。")
+    except Exception as e:
+        print(f"GPIO 初始化失敗: {e}"); cleanup_gpio(); sys.exit(1)
 
-print("按下 'q' 鍵結束程式。")
+def stop():
+    if pwm_L_fwd: pwm_L_fwd.ChangeDutyCycle(0); pwm_L_bwd.ChangeDutyCycle(0)
+    if pwm_R_fwd: pwm_R_fwd.ChangeDutyCycle(0); pwm_R_bwd.ChangeDutyCycle(0)
 
-try:
-    while True:
-        frame = picam2.capture_array()
-        hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
+def _set_speed(speed_L, speed_R):
+    speed_R = int(speed_R * CALIBRATION_FACTOR_R)
+    speed_L = max(0, min(MAX_SPEED_DUTY, speed_L))
+    speed_R = max(0, min(MAX_SPEED_DUTY, speed_R))
+    return speed_L, speed_R
 
-        # 讀取滑條數值
-        h_min = cv2.getTrackbarPos("H_MIN", "Mask")
-        h_max = cv2.getTrackbarPos("H_MAX", "Mask")
-        s_min = cv2.getTrackbarPos("S_MIN", "Mask")
-        s_max = cv2.getTrackbarPos("S_MAX", "Mask")
-        v_min = cv2.getTrackbarPos("V_MIN", "Mask")
-        v_max = cv2.getTrackbarPos("V_MAX", "Mask")
-
-        lower_color = np.array([h_min, s_min, v_min])
-        upper_color = np.array([h_max, s_max, v_max])
-
-        mask = cv2.inRange(hsv, lower_color, upper_color)
-
-        # 形態學處理
-        mask_processed = cv2.erode(mask, None, iterations=2)
-        mask_processed = cv2.dilate(mask_processed, None, iterations=2)
-
-        # 尋找輪廓
-        contours, _ = cv2.findContours(mask_processed.copy(), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-        if len(contours) > 0:
-            c = max(contours, key=cv2.contourArea)
-            ((x, y), radius) = cv2.minEnclosingCircle(c)
-            if radius > 3:
-                cv2.circle(frame, (int(x), int(y)), int(radius), (0, 255, 0), 2)
-
-        cv2.imshow("Original Frame", frame)
-        cv2.imshow("Mask", mask_processed)
-
-        if cv2.waitKey(1) & 0xFF == ord('q'):
-            break
-
-except KeyboardInterrupt:
-    print("\n使用者中斷程式。")
-finally:
-    picam2.stop()
-    picam2.close()
-    cv2.destroyAllWindows()
-    print("程式結束。")
-
-```
-#### 馬達移動控制
-
-透過 BTS7960 馬達驅動板控制左右馬達，可實現：
-
-- 前進  
-- 後退  
-- 左轉  
-- 右轉  
-
-```python
-# 範例程式碼
 def move_forward(speed):
-    pwm_L_fwd.ChangeDutyCycle(speed)
-    pwm_R_fwd.ChangeDutyCycle(speed)
+    speed_L, speed_R = _set_speed(speed, speed)
+    pwm_L_bwd.ChangeDutyCycle(0); pwm_L_fwd.ChangeDutyCycle(speed_L)
+    pwm_R_bwd.ChangeDutyCycle(0); pwm_R_fwd.ChangeDutyCycle(speed_R)
+
+def move_backward(speed):
+    speed_L, speed_R = _set_speed(speed, speed)
+    pwm_L_fwd.ChangeDutyCycle(0); pwm_L_bwd.ChangeDutyCycle(speed_L)
+    pwm_R_fwd.ChangeDutyCycle(0); pwm_R_bwd.ChangeDutyCycle(speed_R)
+
+def turn_left(speed): # 原地左轉
+    speed_L, speed_R = _set_speed(speed, speed)
+    pwm_L_fwd.ChangeDutyCycle(0); pwm_L_bwd.ChangeDutyCycle(speed_L) # 左輪後退
+    pwm_R_bwd.ChangeDutyCycle(0); pwm_R_fwd.ChangeDutyCycle(speed_R) # 右輪前進
+    
+def turn_right(speed): # 原地右轉
+    speed_L, speed_R = _set_speed(speed, speed)
+    pwm_L_bwd.ChangeDutyCycle(0); pwm_L_fwd.ChangeDutyCycle(speed_L) # 左輪前進
+    pwm_R_fwd.ChangeDutyCycle(0); pwm_R_bwd.ChangeDutyCycle(speed_R) # 右輪後退
+
+def cleanup_gpio():
+    try:
+        stop()
+        if pwm_L_fwd: pwm_L_fwd.stop()
+        if pwm_L_bwd: pwm_L_bwd.stop()
+        if pwm_R_fwd: pwm_R_fwd.stop()
+        if pwm_R_bwd: pwm_R_bwd.stop()
+        GPIO.cleanup()
+        print("GPIO 資源已清除。")
+    except:
+        pass 
+
+# =========================================================
+# IV. 追蹤主循環 
+# =========================================================
+def run_tracker():
+    init_motor_pins()
+    
+    picam2 = Picamera2()
+    config = picam2.create_preview_configuration(
+        main={"size": (FRAME_WIDTH, FRAME_HEIGHT), "format": "BGR888"}
+    )
+    picam2.configure(config)
+    picam2.set_controls({
+        'AwbEnable': False,
+        'AnalogueGain': 1.0,
+        'ColourGains': (1.5, 1.5)
+    })
+    picam2.start()
+    time.sleep(1.0)
+
+    print("--- 分階段追蹤程式啟動 ---")
+    
+    try:
+        while True:
+            frame = picam2.capture_array()
+            if FLIP_CODE is not None:
+                frame = cv2.flip(frame, FLIP_CODE)
+
+            hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
+            mask = cv2.inRange(hsv, LOWER_COLOR, UPPER_COLOR)
+            
+            # 形態學操作 (開運算)
+            mask_processed = cv2.erode(mask, None, iterations=2)
+            mask_processed = cv2.dilate(mask_processed, None, iterations=2) 
+
+            contours, _ = cv2.findContours(mask_processed.copy(), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+
+            ball_found = False
+            direction_text = "LOST TARGET"
+            dx, dy = 0, 0 
+            speed_cmd = 0
+
+            if len(contours) > 0:
+                c = max(contours, key=cv2.contourArea)
+                ((x, y), radius) = cv2.minEnclosingCircle(c)
+
+                if radius > 2:
+                    area = cv2.contourArea(c)
+                    if area > 10: 
+                        ball_found = True
+                        M = cv2.moments(c)
+                        if M["m00"] > 0:
+                            center_x = int(M["m10"] / M["m00"])
+                            center_y = int(M["m01"] / M["m00"]) 
+                            
+                            dx = center_x - CENTER_X
+                            dy = center_y - CENTER_Y
+                            
+                            fixed_speed = MIN_SPEED 
+
+                            # A. 判斷 X 軸 (原地轉向優先)
+                            if abs(dx) > X_TOLERANCE:
+                                # 🎯 修正: 轉向速度固定為 MIN_SPEED
+                                speed_cmd = fixed_speed
+                                
+                                if dx < 0:
+                                    
+                                    turn_left(speed_cmd)
+                                    direction_text = f"TRN L {int(speed_cmd)}%"
+                                else :
+                                    
+                                    turn_right(speed_cmd)
+                                    direction_text = f"TRN R {int(speed_cmd)}%"
+                            
+                            # B. X 軸對齊後，判斷 Y 軸 (固定速度前後移動)
+                            else:
+                                if abs(dy) > Y_TOLERANCE:
+                                    
+                                    # 🎯 修正: 前後移動速度固定為 MIN_SPEED
+                                    speed_cmd = fixed_speed
+                                    
+                                    # 鏡頭朝上，目標 Y=240 鎖定邏輯
+                                    if dy < 0:
+                                        # dy < 0: 球在上方 (Y < 240) -> 太近，需要後退
+                                        move_backward(speed_cmd)
+                                        direction_text = f"BCK {int(fixed_speed)}%"
+                                    else:
+                                        # dy > 0: 球在下方 (Y > 240) -> 太遠，需要前進
+                                        move_forward(speed_cmd)
+                                        direction_text = f"FWD {int(fixed_speed)}%"
+                                else:
+                                    # X/Y 軸都在容許範圍內
+                                    stop()
+                                    direction_text = "TARGET LOCKED"
+
+            if not ball_found:
+                stop()
+                direction_text = "LOST TARGET"
+                
+            # 6. 輸出資訊到終端機 
+            print(f"狀態: {direction_text} | 偏差 X: {dx}, Y: {dy} | Speed: {int(speed_cmd)}", end='\r')
+
+    except KeyboardInterrupt:
+        print("\n使用者中斷程式。")
+    except Exception as e:
+        print(f"程式運行中發生錯誤: {e}")
+    finally:
+        cleanup_gpio()
+        picam2.stop()
+        picam2.close()
+        print("程式結束。")
+
+if __name__ == '__main__':
+    run_tracker()
+
+
+
