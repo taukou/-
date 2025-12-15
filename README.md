@@ -47,14 +47,14 @@
 ## 5. 實體照片、各裝置細節照片
 
 整體外觀照片：  
-![整體外觀](path/to/image.jpg)
+![整體外觀](image/車輛.jepg)
 
 車輛底盤裝置細節：  
-![底盤細節1](path/to/image.jpg)
-![底盤細節2](path/to/image.jpg)
+![底盤細節1](image/底盤1.jepg)
+![底盤細節2](image/底盤2.jepg)
 
 攝影機安裝位置：  
-![攝影機安裝](path/to/image.jpg)
+![攝影機安裝](image/攝影機.jepg)
 
 ---
 
