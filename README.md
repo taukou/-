@@ -50,7 +50,8 @@
 ![整體外觀](path/to/image.jpg)
 
 車輛底盤裝置細節：  
-![底盤細節](path/to/image.jpg)
+![底盤細節1](path/to/image.jpg)
+![底盤細節2](path/to/image.jpg)
 
 攝影機安裝位置：  
 ![攝影機安裝](path/to/image.jpg)
@@ -59,11 +60,8 @@
 
 ## 6. 電路配置
 
-車輛底盤電路配置圖：  
-![電路配置](path/to/image.jpg)
-
 樹莓派 GPIO 接線示意圖：  
-![GPIO 接線圖](path/to/image.jpg)
+![GPIO 接線圖](image/電路圖.png)
 
 ---
 
@@ -173,10 +171,10 @@ mask = cv2.inRange(hsv, LOWER_COLOR, UPPER_COLOR)
 - 控制馬達向目標移動。
 
 #### (3) HSV 蒙版示意圖
-原始影像：手上拿著垃圾
-HSV 蒙版後影像：目標顯示為白色區域
+- 原始影像：手上拿著垃圾
+- HSV 蒙版後影像：目標顯示為白色區域
 
-![HSV 蒙版示意圖](path/to/image.jpg)
+![HSV 蒙版示意圖](image/hsv色彩測試範例圖.png)
 
 ---
 
@@ -214,17 +212,106 @@ python3 hsv_color_test.py
 - 調整滑條，觀察 `Mask` 視窗中的白色區域是否對應目標顏色。
 - 確認後記下對應數值，作為追蹤程式的的預設數值
 
-### (4) 顯示與輪廓
+#### (4) 顯示與輪廓
 
 - 程式會自動尋找蒙版中的最大輪廓。
 - 以綠色圓圈標記目標物體中心。
 - 可視化追蹤效果，方便微調 HSV 範圍。
 
-### (5) 結束程式
+#### (5) 結束程式
 
 - 按下 `q` 鍵或使用 Ctrl+C 結束程式。
 - 程式會自動釋放攝影機與關閉視窗。
+#### hsv_color_test程式碼內容
+```python
+import cv2
+import numpy as np
+import time
+from picamera2 import Picamera2
 
+# =========================================================
+# 視窗與滑條回呼函式
+# =========================================================
+def nothing(x):
+    pass
+
+# =========================================================
+# 初始化 Picamera2
+# =========================================================
+FRAME_WIDTH = 640
+FRAME_HEIGHT = 480
+
+picam2 = Picamera2()
+config = picam2.create_preview_configuration(
+    main={"size": (FRAME_WIDTH, FRAME_HEIGHT), "format": "BGR888"}
+)
+picam2.configure(config)
+picam2.set_controls({
+    'AwbEnable': False,       # 關閉自動白平衡
+    'AnalogueGain': 1.0,
+    'ColourGains': (1.5, 1.5)
+})
+picam2.start()
+time.sleep(0.5)  # 等待自動曝光穩定
+
+# =========================================================
+# 建立控制滑條視窗
+# =========================================================
+cv2.namedWindow("Mask")
+cv2.createTrackbar("H_MIN", "Mask", 0, 179, nothing)
+cv2.createTrackbar("H_MAX", "Mask", 179, 179, nothing)
+cv2.createTrackbar("S_MIN", "Mask", 0, 255, nothing)
+cv2.createTrackbar("S_MAX", "Mask", 255, 255, nothing)
+cv2.createTrackbar("V_MIN", "Mask", 0, 255, nothing)
+cv2.createTrackbar("V_MAX", "Mask", 255, 255, nothing)
+
+print("按下 'q' 鍵結束程式。")
+
+try:
+    while True:
+        frame = picam2.capture_array()
+        hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
+
+        # 讀取滑條數值
+        h_min = cv2.getTrackbarPos("H_MIN", "Mask")
+        h_max = cv2.getTrackbarPos("H_MAX", "Mask")
+        s_min = cv2.getTrackbarPos("S_MIN", "Mask")
+        s_max = cv2.getTrackbarPos("S_MAX", "Mask")
+        v_min = cv2.getTrackbarPos("V_MIN", "Mask")
+        v_max = cv2.getTrackbarPos("V_MAX", "Mask")
+
+        lower_color = np.array([h_min, s_min, v_min])
+        upper_color = np.array([h_max, s_max, v_max])
+
+        mask = cv2.inRange(hsv, lower_color, upper_color)
+
+        # 形態學處理
+        mask_processed = cv2.erode(mask, None, iterations=2)
+        mask_processed = cv2.dilate(mask_processed, None, iterations=2)
+
+        # 尋找輪廓
+        contours, _ = cv2.findContours(mask_processed.copy(), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        if len(contours) > 0:
+            c = max(contours, key=cv2.contourArea)
+            ((x, y), radius) = cv2.minEnclosingCircle(c)
+            if radius > 3:
+                cv2.circle(frame, (int(x), int(y)), int(radius), (0, 255, 0), 2)
+
+        cv2.imshow("Original Frame", frame)
+        cv2.imshow("Mask", mask_processed)
+
+        if cv2.waitKey(1) & 0xFF == ord('q'):
+            break
+
+except KeyboardInterrupt:
+    print("\n使用者中斷程式。")
+finally:
+    picam2.stop()
+    picam2.close()
+    cv2.destroyAllWindows()
+    print("程式結束。")
+
+```
 #### 馬達移動控制
 
 透過 BTS7960 馬達驅動板控制左右馬達，可實現：
